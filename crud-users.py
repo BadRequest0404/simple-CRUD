@@ -2,8 +2,13 @@ import os
 import re
 import hashlib
 import psycopg2
+import getpass
+import sys
 from decouple import config
 
+if os.name != 'nt':
+    import tty
+    import termios
 
 DROP_TABLE_USERS = "DROP TABLE IF EXISTS users"
 
@@ -156,13 +161,79 @@ def require_admin(function):
     return wrapper
 
 
+def get_hidden_input(prompt=""):
+    """
+    Función reutilizable para ocultar la entrada de contraseña.
+    Muestra asteriscos (*) mientras el usuario escribe.
+    Compatible con sistemas Unix/Linux y Windows.
+
+    Args:
+        prompt: El mensaje que se muestra antes de la entrada
+
+    Returns:
+        La contraseña ingresada por el usuario
+    """
+    if os.name == 'nt':  # Windows
+        try:
+            # Intentar usar getpass primero (funciona en la mayoría de terminales)
+            return getpass.getpass(prompt)
+        except Exception:
+            # Fallback para Windows si getpass no funciona
+            print(prompt, end='', flush=True)
+            password = ""
+            while True:
+                char = msvcrt.getch().decode('utf-8')
+                if char == '\r' or char == '\n':  # Enter
+                    print()
+                    break
+                elif char == '\b':  # Backspace
+                    if password:
+                        password = password[:-1]
+                        print('\b \b', end='', flush=True)
+                else:
+                    password += char
+                    print('*', end='', flush=True)
+            return password
+    else:  # Unix/Linux/Mac
+        try:
+            # Intentar usar getpass primero (funciona en la mayoría de terminales)
+            return getpass.getpass(prompt)
+        except Exception:
+            # Implementación manual para Unix/Linux si getpass no funciona
+            print(prompt, end='', flush=True)
+            fd = sys.stdin.fileno()
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                password = ""
+                while True:
+                    char = sys.stdin.read(1)
+                    if char == '\r' or char == '\n':  # Enter
+                        sys.stdout.write('\n')
+                        sys.stdout.flush()
+                        break
+                    elif char == '\x7f':  # Backspace
+                        if password:
+                            password = password[:-1]
+                            sys.stdout.write('\b \b')
+                            sys.stdout.flush()
+                    elif ord(char) >= 32:  # Caracteres imprimibles
+                        password += char
+                        sys.stdout.write('*')
+                        sys.stdout.flush()
+                return password
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+
 def login(connect, cursor):
     """
     Función para iniciar sesión en el sistema
     """
     print(">>> Iniciar sesión")
     username = input(">>> Username: ")
-    password = input(">>> Password: ")
+    # Usar la función de ocultación de contraseña
+    password = get_hidden_input(">>> Password: ")
 
     query = (
         "SELECT id, username, email, password, group_role "
@@ -214,13 +285,15 @@ def create_user(connect, cursor, current_user):
         break
 
     while True:
-        password = input(">>> Password: ")
+        # Usar la función de ocultación de contraseña
+        password = get_hidden_input(">>> Password: ")
         is_valid, message = validate_password(password)
         if not is_valid:
             print(f">>> Error: {message}")
             continue
 
-        password_confirm = input(">>> Confirm password: ")
+        # Usar la función de ocultación de contraseña para la confirmación
+        password_confirm = get_hidden_input(">>> Confirm password: ")
         if password != password_confirm:
             print(">>> Error: Las contraseñas no coinciden.")
             continue
@@ -352,13 +425,15 @@ def update_user(id, connect, cursor, current_user):
 
     if change_password:
         while True:
-            password = input(">>> New password: ")
+            # Usar la función de ocultación de contraseña
+            password = get_hidden_input(">>> New password: ")
             is_valid, message = validate_password(password)
             if not is_valid:
                 print(f">>> Error: {message}")
                 continue
 
-            password_confirm = input(">>> Confirm new password: ")
+            # Usar la función de ocultación de contraseña para la confirmación
+            password_confirm = get_hidden_input(">>> Confirm new password: ")
             if password != password_confirm:
                 print(">>> Error: Las contraseñas no coinciden.")
                 continue
@@ -484,6 +559,10 @@ def create_admin_if_not_exists(connect, cursor):
 
 
 if __name__ == "__main__":
+    # Importar msvcrt solo en Windows para evitar errores en otros sistemas
+    if os.name == 'nt':
+        import msvcrt
+
     try:
         connect = psycopg2.connect(
             host=config("DB_HOST"),
